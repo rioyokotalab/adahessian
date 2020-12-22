@@ -141,7 +141,7 @@ def getData(
     return train_loader, test_loader
 
 
-def test(model, test_loader):
+def validate(model, test_loader):
     # print('Testing')
     model.eval()
     correct = 0

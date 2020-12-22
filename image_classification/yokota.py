@@ -11,13 +11,6 @@ import wandb
 from models import *
 from optim_adahessian import Adahessian
 
-def print0(message):
-    if dist.is_initialized():
-        if dist.get_rank() == 0:
-            print(message, flush=True)
-    else:
-        print(message, flush=True)
-
 class AverageMeter(object):
     def __init__(self, name, fmt=':f'):
         self.name = name
@@ -51,7 +44,7 @@ class ProgressMeter(object):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         entries += self.postfix
-        print0('\t'.join(entries))
+        print('\t'.join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
         num_digits = len(str(num_batches // 1))
@@ -109,11 +102,11 @@ def validate(val_loader,model,criterion,device):
 
 def main():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Example')
-    parser.add_argument('--bs', '--batch_size', type=int, default=32, metavar='N',
+    parser.add_argument('--bs', '--batch_size', type=int, default=256, metavar='N',
                         help='input batch size for training (default: 32)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', '--learning_rate', type=float, default=1.0e-02, metavar='LR',
+    parser.add_argument('--lr', '--learning_rate', type=float, default=0.15, metavar='LR',
                         help='learning rate (default: 1.0e-02)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='momentum (default: 0.9)')
@@ -177,7 +170,8 @@ def main():
     # model = ShuffleNetV2(1)
     # model = EfficientNetB0()
     # model = RegNetX_200MF()
-    model = VGG('VGG19').to(device)
+    model = resnet(num_classes=10, depth=20).to(device)
+    # model = VGG('VGG19').to(device)
     if rank==0:
         wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
     model = DDP(model, device_ids=[rank % ngpus])
@@ -185,18 +179,15 @@ def main():
     #optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
     #        momentum=args.momentum, weight_decay=args.wd)
     optimizer = Adahessian(model.parameters(), lr=args.lr,
-            weight_decay=args.wd)
+            weight_decay=args.wd/args.lr)
 
     for epoch in range(args.epochs):
-        model.train()
         train_loss, train_acc = train(train_loader,model,criterion,optimizer,epoch,device)
         val_loss, val_acc = validate(val_loader,model,criterion,device)
         if rank==0:
             wandb.log({
                 'train_loss': train_loss,
-                'train_acc': train_acc,
-                'val_loss': val_loss,
-                'val_acc': val_acc
+                'val_acc': val_acc*0.01
                 })
 
     dist.destroy_process_group()

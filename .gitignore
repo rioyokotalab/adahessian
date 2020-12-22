@@ -132,3 +132,5 @@ dmypy.json
 
 data
 wandb
+checkpoint
+output
