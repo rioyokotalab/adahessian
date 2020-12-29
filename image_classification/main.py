@@ -69,8 +69,8 @@ args = parser.parse_args()
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
-wandb.init()
-wandb.config.update(args)
+#wandb.init()
+#wandb.config.update(args)
 
 for arg in vars(args):
     print(arg, getattr(args, arg))
@@ -85,7 +85,7 @@ cudnn.benchmark = True
 
 # get model and optimizer
 model = resnet(num_classes=10, depth=args.depth).cuda()
-wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
+#wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
 print(model)
 model = torch.nn.DataParallel(model)
 print('    Total params: %.2fM' % (sum(p.numel()
@@ -155,11 +155,11 @@ for epoch in range(1, args.epochs + 1):
     train_loss /= total_num
     print(f"Training Loss of Epoch {epoch}: {np.around(train_loss, 2)}")
     print(f"Testing of Epoch {epoch}: {np.around(acc * 100, 2)} \n")
-    wandb.log({
-                'train_loss': train_loss,
-                'train_acc': train_acc,
-                'val_acc': acc
-                })
+    #wandb.log({
+    #            'train_loss': train_loss,
+    #            'train_acc': train_acc,
+    #            'val_acc': acc
+    #            })
 
     if acc > best_acc:
         best_acc = acc
