@@ -104,20 +104,20 @@ def validate(val_loader,model,criterion,device):
 
 def main():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Example')
-    parser.add_argument('--bs', '--batch_size', type=int, default=256, metavar='N',
+    parser.add_argument('--bs', '--batch_size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 32)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', '--learning_rate', type=float, default=0.15, metavar='LR',
+    parser.add_argument('--lr', '--learning_rate', type=float, default=1.0e-2, metavar='LR',
                         help='learning rate (default: 1.0e-02)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='momentum (default: 0.9)')
     parser.add_argument('--wd', '--weight_decay', type=float, default=5.0e-04, metavar='W',
-                        help='learning rate (default: 5.0e-04)')
+                        help='weight_decay (default: 5.0e-04)')
     args = parser.parse_args()
 
     master_addr = os.getenv("MASTER_ADDR", default="localhost")
-    master_port = os.getenv('MASTER_POST', default='8888')
+    master_port = os.getenv('MASTER_POST', default='8889')
     method = "tcp://{}:{}".format(master_addr, master_port)
     rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
     world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
