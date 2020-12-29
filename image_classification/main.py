@@ -1,186 +1,173 @@
+#*
+# @file Different utility functions
+# Copyright (c) Zhewei Yao, Amir Gholami, Sheng Shen
+# All rights reserved.
+# This file is part of AdaHessian library.
+#
+# AdaHessian is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# AdaHessian is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with adahessian.  If not, see <http://www.gnu.org/licenses/>.
+#*
+
+from __future__ import print_function
+import logging
+import os
+import sys
+
+import numpy as np
 import argparse
+from tqdm import tqdm, trange
+
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 from torchvision import datasets, transforms
-import time
-import os
-import wandb
+from torch.autograd import Variable
+
 from utils import *
 from models import *
 from optim_adahessian import Adahessian
+import wandb
 
-class AverageMeter(object):
-    def __init__(self, name, fmt=':f'):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
+# Training settings
+parser = argparse.ArgumentParser(description='PyTorch Example')
+parser.add_argument('--batch-size', type=int, default=256, metavar='B',
+                    help='input batch size for training (default: 256)')
+parser.add_argument('--test-batch-size', type=int, default=256, metavar='TB',
+                    help='input batch size for testing (default: 256)')
+parser.add_argument('--epochs', type=int, default=160, metavar='E',
+                    help='number of epochs to train (default: 10)')
+parser.add_argument('--lr', type=float, default=0.15, metavar='LR',
+                    help='learning rate (default: 0.15)')
+parser.add_argument('--lr-decay', type=float, default=0.1,
+                    help='learning rate ratio')
+parser.add_argument('--lr-decay-epoch', type=int, nargs='+', default=[80, 120],
+                    help='decrease learning rate at these epochs.')
+parser.add_argument('--seed', type=int, default=1, metavar='S',
+                    help='random seed (default: 1)')
+parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
+                    metavar='W', help='weight decay (default: 5e-4)')
+parser.add_argument('--depth', type=int, default=20,
+                    help='choose the depth of resnet')
+parser.add_argument('--optimizer', type=str, default='adahessian',
+                    help='choose optim')
 
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
+args = parser.parse_args()
+# set random seed to reproduce the work
+torch.manual_seed(args.seed)
+torch.cuda.manual_seed(args.seed)
 
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
+wandb.init()
+wandb.config.update(args)
 
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
+for arg in vars(args):
+    print(arg, getattr(args, arg))
+if not os.path.isdir('checkpoint/'):
+    os.makedirs('checkpoint/')
+# get dataset
+train_loader, test_loader = getData(
+    name='cifar10', train_bs=args.batch_size, test_bs=args.test_batch_size)
 
-class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix="", postfix=""):
-        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
-        self.meters = meters
-        self.prefix = prefix
-        self.postfix = postfix
+# make sure to use cudnn.benchmark for second backprop
+cudnn.benchmark = True
 
-    def display(self, batch):
-        entries = [self.prefix + self.batch_fmtstr.format(batch)]
-        entries += [str(meter) for meter in self.meters]
-        entries += self.postfix
-        print('\t'.join(entries))
+# get model and optimizer
+model = resnet(num_classes=10, depth=args.depth).cuda()
+wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
+print(model)
+model = torch.nn.DataParallel(model)
+print('    Total params: %.2fM' % (sum(p.numel()
+                                       for p in model.parameters()) / 1000000.0))
 
-    def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
-def train(train_loader,model,criterion,optimizer,epoch,device):
-    batch_time = AverageMeter('Time', ':.4f')
-    train_loss = AverageMeter('Loss', ':.6f')
-    train_acc = AverageMeter('Accuracy', ':.6f')
-    progress = ProgressMeter(
-        len(train_loader),
-        [train_loss, train_acc, batch_time],
-        prefix="Epoch: [{}]".format(epoch))
-    model.train()
-    t = time.perf_counter()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        data = data.to(device)
-        target = target.to(device)
-        output = model(data)
-        loss = criterion(output, target)
-        train_loss.update(loss.item(), data.size(0))
-        pred = output.data.max(1)[1]
-        acc = 100. * pred.eq(target.data).cpu().sum() / target.size(0)
-        train_acc.update(acc, data.size(0))
-        optimizer.zero_grad()
-        loss.backward(create_graph=True)
-        optimizer.step()
-        if batch_idx % 20 == 0:
-            batch_time.update(time.perf_counter() - t)
-            t = time.perf_counter()
-            progress.display(batch_idx)
-    return train_loss.avg, train_acc.avg
-
-def validate(val_loader,model,criterion,device):
-    val_loss = AverageMeter('Loss', ':.6f')
-    val_acc = AverageMeter('Accuracy', ':.1f')
-    progress = ProgressMeter(
-        len(val_loader),
-        [val_loss, val_acc],
-        prefix='\nValidation: ',
-        postfix='\n')
-    model.eval()
-    for data, target in val_loader:
-        data = data.to(device)
-        target = target.to(device)
-        output = model(data)
-        loss = criterion(output, target)
-        val_loss.update(loss.item(), data.size(0))
-        pred = output.data.max(1)[1]
-        acc = 100. * pred.eq(target.data).cpu().sum() / target.size(0)
-        val_acc.update(acc, data.size(0))
-    progress.display(len(val_loader))
-    return val_loss.avg, val_acc.avg
-
-def main():
-    # Training settings
-    parser = argparse.ArgumentParser(description='PyTorch Example')
-    parser.add_argument('--bs', '--batch-size', type=int, default=256, metavar='B',
-                        help='input batch size for training (default: 256)')
-    parser.add_argument('--epochs', type=int, default=140, metavar='E',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.15, metavar='LR',
-                        help='learning rate (default: 0.15)')
-    #parser.add_argument('--lr-decay', type=float, default=0.1,
-    #                    help='learning rate ratio')
-    #parser.add_argument('--lr-decay-epoch', type=int, nargs='+', default=[80, 120],
-    #                    help='decrease learning rate at these epochs.')
-    parser.add_argument('--weight-decay', '--wd', default=5e-4, type=float,
-                        metavar='W', help='weight decay (default: 5e-4)')
-    parser.add_argument('--optimizer', type=str, default='adahessian',
-                        help='choose optim')
-    args = parser.parse_args()
-
-    device = torch.device('cuda',0)
-
-    wandb.init()
-    wandb.config.update(args)
-
-    # get dataset
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-
-    transform_val = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
-
-    train_dataset = datasets.CIFAR10('./data',
-                                     train=True,
-                                     download=True,
-                                     transform=transform_train)
-    val_dataset = datasets.CIFAR10('./data',
-                                   train=False,
-                                   transform=transform_val)
-    train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=args.bs)
-    val_loader = torch.utils.data.DataLoader(dataset=val_dataset,
-                                             batch_size=args.bs,
-                                             shuffle=False)
-
-    # make sure to use cudnn.benchmark for second backprop
-    #cudnn.benchmark = True
-
-    # get model and optimizer
-    model = resnet(num_classes=10, depth=20).to(device)
-    wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
-    model = torch.nn.DataParallel(model)
-
-    criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss()
+if args.optimizer == 'sgd':
+    optimizer = optim.SGD(
+        model.parameters(),
+        lr=args.lr,
+        momentum=0.9,
+        weight_decay=args.weight_decay)
+elif args.optimizer == 'adam':
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay)
+elif args.optimizer == 'adamw':
+    print('For AdamW, we automatically correct the weight decay term for you! If this is not what you want, please modify the code!')
+    args.weight_decay = args.weight_decay / args.lr
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay)
+elif args.optimizer == 'adahessian':
+    print('For AdaHessian, we use the decoupled weight decay as AdamW. Here we automatically correct this for you! If this is not what you want, please modify the code!')
     args.weight_decay = args.weight_decay / args.lr
     optimizer = Adahessian(
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay)
+else:
+    raise Exception('We do not support this optimizer yet!!')
 
-    # learning rate schedule
-    #scheduler = torch.lr_scheduler.MultiStepLR(
-    #    optimizer,
-    #    args.lr_decay_epoch,
-    #    gamma=args.lr_decay,
-    #    last_epoch=-1)
+# learning rate schedule
+scheduler = lr_scheduler.MultiStepLR(
+    optimizer,
+    args.lr_decay_epoch,
+    gamma=args.lr_decay,
+    last_epoch=-1)
 
-    for epoch in range(1, args.epochs + 1):
-        train_loss, train_acc = train(train_loader,model,criterion,optimizer,epoch,device)
-        val_loss, val_acc = validate(val_loader,model,criterion,device)
-        # scheduler.step()
-        wandb.log({
-            'train_loss': train_loss,
-            'val_acc': val_acc*0.01
-            })
 
-if __name__ == '__main__':
-    main()
+best_acc = 0.0
+for epoch in range(1, args.epochs + 1):
+    print('Current Epoch: ', epoch)
+    train_loss = 0.
+    total_num = 0
+    correct = 0
+
+    scheduler.step()
+    model.train()
+    with tqdm(total=len(train_loader.dataset)) as progressbar:
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.cuda(), target.cuda()
+            output = model(data)
+            loss = criterion(output, target)
+            loss.backward(create_graph=True)
+            train_loss += loss.item() * target.size()[0]
+            total_num += target.size()[0]
+            _, predicted = output.max(1)
+            correct += predicted.eq(target).sum().item()
+            optimizer.step()
+            optimizer.zero_grad()
+            progressbar.update(target.size(0))
+
+    acc = test(model, test_loader)
+    train_loss /= total_num
+    print(f"Training Loss of Epoch {epoch}: {np.around(train_loss, 2)}")
+    print(f"Testing of Epoch {epoch}: {np.around(acc * 100, 2)} \n")
+    wandb.log({
+                'train_loss': train_loss,
+                'train_acc': train_acc,
+                'val_acc': acc
+                })
+
+    if acc > best_acc:
+        best_acc = acc
+        torch.save({
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'best_accuracy': best_acc,
+            }, 'checkpoint/netbest.pkl')
+
+print(f'Best Acc: {np.around(best_acc * 100, 2)}')

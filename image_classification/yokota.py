@@ -1,5 +1,6 @@
 import argparse
 import torch
+import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,6 +11,7 @@ import os
 import wandb
 from models import *
 from optim_adahessian import Adahessian
+from ada_hessian import AdaHessian
 
 class AverageMeter(object):
     def __init__(self, name, fmt=':f'):
@@ -122,8 +124,10 @@ def main():
     dist.init_process_group("nccl", init_method=method, rank=rank, world_size=world_size)
     ngpus = torch.cuda.device_count()
     device = torch.device('cuda',rank % ngpus)
+    cudnn.benchmark = True
 
-    if rank==0:
+    use_wandb = False
+    if rank==0 and use_wandb==True:
         wandb.init()
         wandb.config.update(args)
 
@@ -172,19 +176,19 @@ def main():
     # model = RegNetX_200MF()
     model = resnet(num_classes=10, depth=20).to(device)
     # model = VGG('VGG19').to(device)
-    if rank==0:
+    if rank==0 and use_wandb==True:
         wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
     model = DDP(model, device_ids=[rank % ngpus])
     criterion = nn.CrossEntropyLoss()
     #optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
     #        momentum=args.momentum, weight_decay=args.wd)
-    optimizer = Adahessian(model.parameters(), lr=args.lr,
+    optimizer = AdaHessian(model.parameters(), lr=args.lr,
             weight_decay=args.wd/args.lr)
 
     for epoch in range(args.epochs):
         train_loss, train_acc = train(train_loader,model,criterion,optimizer,epoch,device)
         val_loss, val_acc = validate(val_loader,model,criterion,device)
-        if rank==0:
+        if rank==0 and use_wandb==True:
             wandb.log({
                 'train_loss': train_loss,
                 'val_acc': val_acc*0.01
