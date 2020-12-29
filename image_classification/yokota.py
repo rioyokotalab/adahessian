@@ -126,7 +126,7 @@ def main():
     device = torch.device('cuda',rank % ngpus)
     cudnn.benchmark = True
 
-    use_wandb = False
+    use_wandb = True
     if rank==0 and use_wandb==True:
         wandb.init()
         wandb.config.update(args)
@@ -180,10 +180,10 @@ def main():
         wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
     model = DDP(model, device_ids=[rank % ngpus])
     criterion = nn.CrossEntropyLoss()
-    #optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
-    #        momentum=args.momentum, weight_decay=args.wd)
-    optimizer = AdaHessian(model.parameters(), lr=args.lr,
-            weight_decay=args.wd/args.lr)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
+            momentum=args.momentum, weight_decay=args.wd)
+    #optimizer = AdaHessian(model.parameters(), lr=args.lr,
+    #        weight_decay=args.wd/args.lr)
 
     for epoch in range(args.epochs):
         train_loss, train_acc = train(train_loader,model,criterion,optimizer,epoch,device)
