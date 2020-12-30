@@ -1,5 +1,5 @@
 import torch
-
+import torch.distributed as dist
 
 class AdaHessian(torch.optim.Optimizer):
     """
@@ -83,8 +83,9 @@ class AdaHessian(torch.optim.Optimizer):
         for i in range(self.n_samples):
             zs = [torch.randint(0, 2, p.size(), generator=self.generator, device=p.device) * 2.0 - 1.0 for p in params]  # Rademacher distribution {-1.0, 1.0}
             h_zs = torch.autograd.grad(grads, params, grad_outputs=zs, only_inputs=True, retain_graph=i < self.n_samples - 1)
-            print(h_zs[0].norm())
             for h_z, z, p in zip(h_zs, zs, params):
+                dist.all_reduce(h_z, op=dist.ReduceOp.SUM)
+                h_z /= dist.get_world_size()
                 p.hess += h_z * z / self.n_samples  # approximate the expected values of z*(H@z)
 
     @torch.no_grad()

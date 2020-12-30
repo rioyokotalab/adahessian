@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
-from torch.nn.parallel import DistributedDataParallel as DDP
+#from torch.nn.parallel import DistributedDataParallel as DDP
 import time
 import os
 import wandb
@@ -53,6 +53,12 @@ class ProgressMeter(object):
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
+def average_gradients(model):
+    size = dist.get_world_size()
+    for param in model.parameters():
+        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+        param.grad.data /= size
+
 def train(train_loader,model,criterion,optimizer,epoch,device):
     batch_time = AverageMeter('Time', ':.4f')
     train_loss = AverageMeter('Loss', ':.6f')
@@ -74,6 +80,7 @@ def train(train_loader,model,criterion,optimizer,epoch,device):
         train_acc.update(acc, data.size(0))
         optimizer.zero_grad()
         loss.backward(create_graph=True)
+        average_gradients(model)
         optimizer.step()
         if batch_idx % 20 == 0:
             batch_time.update(time.perf_counter() - t)
@@ -104,11 +111,11 @@ def validate(val_loader,model,criterion,device):
 
 def main():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Example')
-    parser.add_argument('--bs', '--batch_size', type=int, default=32, metavar='N',
+    parser.add_argument('--bs', '--batch_size', type=int, default=128, metavar='N',
                         help='input batch size for training (default: 32)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', '--learning_rate', type=float, default=2.0e-2, metavar='LR',
+    parser.add_argument('--lr', '--learning_rate', type=float, default=0.15, metavar='LR',
                         help='learning rate (default: 1.0e-02)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='momentum (default: 0.9)')
@@ -178,12 +185,12 @@ def main():
     # model = VGG('VGG19').to(device)
     if rank==0 and use_wandb==True:
         wandb.config.update({"model": model.__class__.__name__, "dataset": "CIFAR10"})
-    model = DDP(model, device_ids=[rank % ngpus])
+    # model = DDP(model, device_ids=[rank % ngpus])
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
-            momentum=args.momentum, weight_decay=args.wd)
-    #optimizer = AdaHessian(model.parameters(), lr=args.lr,
-    #        weight_decay=args.wd/args.lr)
+    #optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
+    #        momentum=args.momentum, weight_decay=args.wd)
+    optimizer = AdaHessian(model.parameters(), lr=args.lr,
+            weight_decay=args.wd/args.lr)
 
     for epoch in range(args.epochs):
         train_loss, train_acc = train(train_loader,model,criterion,optimizer,epoch,device)
