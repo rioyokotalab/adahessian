@@ -1,1 +1,0 @@
-export CUDA_VISIBLE_DEVICES=0; python main.py --lr 0.001 --optimizer adam --depth 20

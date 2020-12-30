@@ -3,14 +3,12 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import datasets, transforms
 #from torch.nn.parallel import DistributedDataParallel as DDP
 import time
 import os
 import wandb
 from models import *
-from optim_adahessian import Adahessian
 from ada_hessian import AdaHessian
 
 class AverageMeter(object):
