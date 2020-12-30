@@ -131,7 +131,7 @@ def main():
     device = torch.device('cuda',rank % ngpus)
     cudnn.benchmark = True
 
-    use_wandb = True
+    use_wandb = False
     if rank==0 and use_wandb==True:
         wandb.init()
         wandb.config.update(args)
